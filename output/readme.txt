@@ -1,1 +1,1 @@
-Built executable files located here.
+upload C:\Users\albio\Downloads\corona\corona\output\readme.txt Hello0
